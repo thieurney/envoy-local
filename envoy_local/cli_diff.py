@@ -29,30 +29,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_env_file(path: str, label: str) -> tuple["EnvFile | None", int]:
+    """Load an EnvFile from *path*, printing a friendly error on failure.
+
+    Returns a ``(env_file, exit_code)`` tuple.  On success *exit_code* is 0
+    and *env_file* is the loaded :class:`EnvFile`.  On failure *exit_code* is
+    1 and *env_file* is ``None``.
+    """
+    ef = EnvFile(path)
+    try:
+        ef.load()
+    except FileNotFoundError:
+        print(f"Error: {label} file not found: {path}", file=sys.stderr)
+        return None, 1
+    return ef, 0
+
+
 def run(argv=None) -> int:
     """Entry point for the diff CLI command. Returns exit code."""
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    base_ef = EnvFile(args.base)
-    target_ef = EnvFile(args.target)
+    base_ef, code = _load_env_file(args.base, "base")
+    if code:
+        return code
 
-    try:
-        base_ef.load()
-    except FileNotFoundError:
-        print(f"Error: base file not found: {args.base}", file=sys.stderr)
-        return 1
-
-    try:
-        target_ef.load()
-    except FileNotFoundError:
-        print(f"Error: target file not found: {args.target}", file=sys.stderr)
-        return 1
+    target_ef, code = _load_env_file(args.target, "target")
+    if code:
+        return code
 
     engine = DiffEngine(mask_secrets=not args.no_mask)
     result = engine.compare(base_ef, target_ef)
 
-    print(f"Comparing: {args.base}  →  {args.target}")
+    print(f"Comparing: {args.base}  \u2192  {args.target}")
     print("-" * 48)
 
     if args.summary:
