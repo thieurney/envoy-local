@@ -1,93 +1,107 @@
-"""Core module for reading, writing, and managing .env files."""
+"""EnvFile: load, manipulate and save .env files with optional metadata support."""
 
 from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-ENV_LINE_PATTERN = re.compile(
-    r'^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$'
+_LINE_RE = re.compile(
+    r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>[^#]*)(?P<comment>#.*)?$"
 )
-COMMENT_PATTERN = re.compile(r'^\s*#.*$')
 
 
 class EnvFile:
-    """Represents a single .env file with parsed key-value pairs."""
+    """Represents a single .env file on disk."""
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
-        self._entries: Dict[str, str] = {}
-        self._raw_lines: list[str] = []
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._data: Dict[str, str] = {}
+        self._meta: Dict[str, Dict[str, Any]] = {}
+        self._order: List[str] = []
 
-    def load(self) -> "EnvFile":
-        """Load and parse the .env file from disk."""
-        if not self.path.exists():
+    # ------------------------------------------------------------------
+    # I/O
+    # ------------------------------------------------------------------
+
+    def load(self) -> None:
+        """Parse the file from disk."""
+        self._data.clear()
+        self._meta.clear()
+        self._order.clear()
+
+        if not os.path.exists(self.path):
             raise FileNotFoundError(f".env file not found: {self.path}")
 
-        self._raw_lines = self.path.read_text(encoding="utf-8").splitlines()
-        self._entries = {}
-
-        for line in self._raw_lines:
-            match = ENV_LINE_PATTERN.match(line.strip())
-            if match:
-                key = match.group("key")
-                value = _strip_quotes(match.group("value").strip())
-                self._entries[key] = value
-
-        return self
+        with open(self.path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                m = _LINE_RE.match(line)
+                if not m:
+                    continue
+                key = m.group("key")
+                raw_value = m.group("value").strip()
+                comment = (m.group("comment") or "").strip()
+                # Strip surrounding quotes
+                if len(raw_value) >= 2 and raw_value[0] in ('"', "'") and raw_value[0] == raw_value[-1]:
+                    raw_value = raw_value[1:-1]
+                self._data[key] = raw_value
+                self._meta[key] = {"comment": comment}
+                if key not in self._order:
+                    self._order.append(key)
 
     def save(self) -> None:
-        """Persist current entries back to disk, preserving comments and order."""
-        updated_keys: set[str] = set()
-        new_lines: list[str] = []
+        """Write the current state back to disk."""
+        lines: List[str] = []
+        for key in self._order:
+            value = self._data.get(key, "")
+            comment = self._meta.get(key, {}).get("comment", "")
+            line = f'{key}="{value}"'
+            if comment:
+                line = f"{line}  {comment}"
+            lines.append(line)
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + ("\n" if lines else ""))
 
-        for line in self._raw_lines:
-            match = ENV_LINE_PATTERN.match(line.strip())
-            if match:
-                key = match.group("key")
-                if key in self._entries:
-                    new_lines.append(f"{key}={self._entries[key]}")
-                    updated_keys.add(key)
-                else:
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-
-        for key, value in self._entries.items():
-            if key not in updated_keys:
-                new_lines.append(f"{key}={value}")
-
-        self.path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    # ------------------------------------------------------------------
+    # Data access
+    # ------------------------------------------------------------------
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        return self._entries.get(key, default)
+        return self._data.get(key, default)
 
-    def set(self, key: str, value: str) -> None:
-        self._entries[key] = value
+    def set(self, key: str, value: str, comment: str = "") -> None:
+        if key not in self._order:
+            self._order.append(key)
+        self._data[key] = value
+        if key not in self._meta:
+            self._meta[key] = {}
+        self._meta[key]["comment"] = comment
 
     def delete(self, key: str) -> bool:
-        if key in self._entries:
-            del self._entries[key]
-            self._raw_lines = [
-                line for line in self._raw_lines
-                if not ENV_LINE_PATTERN.match(line.strip()) or
-                ENV_LINE_PATTERN.match(line.strip()).group("key") != key  # type: ignore[union-attr]
-            ]
+        if key in self._data:
+            del self._data[key]
+            del self._meta[key]
+            self._order.remove(key)
             return True
         return False
 
-    @property
-    def entries(self) -> Dict[str, str]:
-        return dict(self._entries)
+    def keys(self) -> List[str]:
+        return list(self._order)
 
-    def __repr__(self) -> str:
-        return f"EnvFile(path={self.path!r}, keys={list(self._entries.keys())})"
+    def items(self) -> Iterator[Tuple[str, str]]:
+        for key in self._order:
+            yield key, self._data[key]
 
+    def metadata(self) -> Dict[str, Dict[str, Any]]:
+        """Return a copy of per-key metadata (e.g. inline comments)."""
+        return {k: dict(v) for k, v in self._meta.items()}
 
-def _strip_quotes(value: str) -> str:
-    """Remove surrounding single or double quotes from a value."""
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-        return value[1:-1]
-    return value
+    def to_dict(self) -> Dict[str, str]:
+        return dict(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._data
