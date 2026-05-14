@@ -87,11 +87,15 @@ class TestRenameEngine:
         assert len(results) == 2
         assert all(r.success for r in results)
 
-    def test_rename_many_partial_failure(self, env_file, engine):
+    def test_rename_many_partial_failure_continues(self, env_file, engine):
+        """rename_many should process all pairs even if some fail."""
         results = engine.rename_many(
-            env_file, {"DB_HOST": "DATABASE_HOST", "MISSING": "SOMETHING"}
+            env_file, {"MISSING_KEY": "NEW_KEY", "DB_HOST": "DATABASE_HOST"}
         )
-        successes = [r for r in results if r.success]
+        assert len(results) == 2
         failures = [r for r in results if not r.success]
-        assert len(successes) == 1
+        successes = [r for r in results if r.success]
         assert len(failures) == 1
+        assert failures[0].old_key == "MISSING_KEY"
+        assert len(successes) == 1
+        assert successes[0].old_key == "DB_HOST"
