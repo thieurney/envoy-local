@@ -49,9 +49,12 @@ class AuditLog:
 
     def _load(self):
         if self.log_path.exists():
-            with open(self.log_path, "r") as f:
-                data = json.load(f)
-            self._entries = [AuditEntry.from_dict(e) for e in data.get("entries", [])]
+            try:
+                with open(self.log_path, "r") as f:
+                    data = json.load(f)
+                self._entries = [AuditEntry.from_dict(e) for e in data.get("entries", [])]
+            except (json.JSONDecodeError, KeyError) as e:
+                raise ValueError(f"Audit log at '{self.log_path}' is corrupted or invalid: {e}") from e
         else:
             self._entries = []
 
@@ -76,3 +79,14 @@ class AuditLog:
         else:
             self._entries = []
         self._save()
+
+    def search(self, action: Optional[str] = None, key: Optional[str] = None, project: Optional[str] = None) -> List[AuditEntry]:
+        """Return entries filtered by any combination of action, key, and project."""
+        results = self._entries
+        if project:
+            results = [e for e in results if e.project == project]
+        if action:
+            results = [e for e in results if e.action == action]
+        if key:
+            results = [e for e in results if e.key == key]
+        return list(results)
