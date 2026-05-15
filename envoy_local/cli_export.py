@@ -37,6 +37,12 @@ def build_parser(subparsers=None) -> argparse.ArgumentParser:
     return parser
 
 
+def _write_output(output: str, path: str) -> None:
+    """Write exported content to a file, raising OSError on failure."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(output + "\n")
+
+
 def run(args: argparse.Namespace) -> int:
     env = EnvFile(args.env_file)
     try:
@@ -53,8 +59,11 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(output + "\n")
+        try:
+            _write_output(output, args.output)
+        except OSError as exc:
+            print(f"Error: could not write to {args.output}: {exc}", file=sys.stderr)
+            return 1
         print(f"Exported to {args.output}")
     else:
         print(output)
